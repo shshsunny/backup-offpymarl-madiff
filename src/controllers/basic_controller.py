@@ -9,6 +9,8 @@ class BasicMAC:
         self.n_agents = args.n_agents
         self.args = args
         input_shape = self._get_input_shape(scheme)
+        # 特别注意：BasicMAC假设所有agent同质，因此只实际上创建一个agent实体，
+        # 但一般通过设置obs_agent_id来区分不同agent的观测输入，使得各个agent的训练互不干扰，且能够并行进行
         self._build_agents(input_shape)
         self.agent_output_type = args.agent_output_type
 
@@ -25,11 +27,10 @@ class BasicMAC:
 
     def forward(self, ep_batch, t, test_mode=False):
         agent_inputs = self._build_inputs(ep_batch, t)
-        #print(agent_inputs.device, self.hidden_states.device)
         avail_actions = ep_batch["avail_actions"][:, t]
         agent_outs, self.hidden_states = self.agent(agent_inputs, self.hidden_states)
         # Softmax the agent outputs if they're policy logits
-        if self.agent_output_type == "pi_logits":
+        if self.agent_output_type == "pi_logits": # 可能的输出类型只有pi_logits 或 q
 
             if getattr(self.args, "mask_before_softmax", True):
                 # Make the logits for unavailable actions very negative to minimise their affect on the softmax
@@ -52,8 +53,20 @@ class BasicMAC:
                     agent_outs[reshaped_avail_actions == 0] = 0.0
 
         return agent_outs.view(ep_batch.batch_size, self.n_agents, -1)
+    
+    def diffusion_loss(self, ep_batch, t, seq_lengths):
+        assert self.args.agent == 'diffusion', "diffusion_loss only available for diffusion agent"
+        bs = ep_batch.batch_size
+        obs = self._build_inputs(ep_batch, t) # (batch_size * n_agents, obs_dim)
+        act = ep_batch["actions_onehot"][:, t].reshape(bs*self.n_agents, -1) # (batch_size * n_agents, act_dim)
+        avail_actions = ep_batch["avail_actions"][:, t]
+        self.hidden_states, loss = self.agent.forward_and_losses(obs, act, self.hidden_states) # loss: # (batch_size * n_agents,)
+        #print("shapes:", loss.shape, (seq_lengths > t).shape)
+        return loss.reshape(bs, -1).sum(-1)[seq_lengths > t].sum()
 
     def init_hidden(self, batch_size):
+        # (batch_size, n_agents, rnn_hidden_dim)
+        # init_hidden(): (1, rnn_hidden_dim) self.hidden_states: (batch_size, n_agents, rnn_hidden_dim)
         self.hidden_states = self.agent.init_hidden().unsqueeze(0).expand(batch_size, self.n_agents, -1)  # bav
 
     def parameters(self):

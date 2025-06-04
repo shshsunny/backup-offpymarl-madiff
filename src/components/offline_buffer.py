@@ -119,7 +119,7 @@ class OfflineBufferH5(): # One Task
 
     @staticmethod
     def max_t_filled(filled):
-        return th.sum(filled, 1).max(0)[0]
+        return th.sum(filled, 1).max(0)[0] # filled: (batch_size, T, 1)，计算所有episodes中最大的有效时间步数
     
     def can_sample(self, batch_size):
         return self.buffer_size >= batch_size
