@@ -49,7 +49,7 @@ sed -i '741s/.*/        pref = 0/' src/envs/smac/smac/env/starcraft2/starcraft2.
 
 To train offline on a dataset from `2` sources, attach `--obs_id_len=2` to the end of the command.
 
-
+### Evaluating
 
 Evaluate a multi-agent policy online:
 
@@ -66,8 +66,6 @@ python src/main.py --online --config=madiff_ctce --env-config=sc2_offline --map_
 ```
 
 Add `--obs_id_len` if necessary. `sed -i '741s/.*/        pref = <0/1>/' src/envs/smac/smac/env/starcraft2/starcraft2.py` and add  `--obs_id_num=<0/1>` if the behavior policy is trained with certain reward shaping preference and ID.
-
-
 
 ### Results
 
