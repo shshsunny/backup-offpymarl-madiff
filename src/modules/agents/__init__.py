@@ -1,6 +1,6 @@
 REGISTRY = {}
 
 from .rnn_agent import RNNAgent
-from .diffusion_agent import DiffusionAgent
+from .madiff_agent import MADiffAgent
 REGISTRY["rnn"] = RNNAgent
-REGISTRY["diffusion"] = DiffusionAgent
+REGISTRY["madiff"] = MADiffAgent

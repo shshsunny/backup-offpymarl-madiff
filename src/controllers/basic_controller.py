@@ -5,13 +5,14 @@ import torch as th
 
 # This multi-agent controller shares parameters between agents
 class BasicMAC:
-    def __init__(self, scheme, groups, args):
+    def __init__(self, scheme, groups, args, madiff_dataset=None):
         self.n_agents = args.n_agents
         self.args = args
         input_shape = self._get_input_shape(scheme)
+        # print("############## MAC input shape: {}".format(input_shape))
         # 特别注意：BasicMAC假设所有agent同质，因此只实际上创建一个agent实体，
         # 但一般通过设置obs_agent_id来区分不同agent的观测输入，使得各个agent的训练互不干扰，且能够并行进行
-        self._build_agents(input_shape)
+        self._build_agents(input_shape, madiff_dataset)
         self.agent_output_type = args.agent_output_type
 
         self.action_selector = action_REGISTRY[args.action_selector](args)
@@ -24,18 +25,29 @@ class BasicMAC:
         agent_outputs = self.forward(ep_batch, t_ep, test_mode=test_mode)
         chosen_actions = self.action_selector.select_action(agent_outputs[bs], avail_actions[bs], t_env, test_mode=test_mode)
         return chosen_actions
-
+    
     def forward(self, ep_batch, t, test_mode=False):
         agent_inputs = self._build_inputs(ep_batch, t)
         avail_actions = ep_batch["avail_actions"][:, t]
+        """if self.args.agent == "madiff" and t > 0:
+            # 先利用上一时刻的post_transition_data更新reward-to-go
+            last_rewards = ep_batch["reward"][:, t-1] # (batch_size, 1)
+            self.agent.update_return_to_go(last_rewards)"""
+        
+        # DIY: MADiffAgent需要利用ep_batch中的信息更新reward-to-go
         agent_outs, self.hidden_states = self.agent(agent_inputs, self.hidden_states)
         # Softmax the agent outputs if they're policy logits
-        if self.agent_output_type == "pi_logits": # 可能的输出类型只有pi_logits 或 q
+        if self.agent_output_type == "pi_logits": 
+            # 可能的输出类型只有pi_logits 或 q
+            # 如果是pi_logits则将其softmax转化为动作分布
 
             if getattr(self.args, "mask_before_softmax", True):
                 # Make the logits for unavailable actions very negative to minimise their affect on the softmax
                 reshaped_avail_actions = avail_actions.reshape(ep_batch.batch_size * self.n_agents, -1)
-                agent_outs[reshaped_avail_actions == 0] = -1e10
+                if self.args.agent == "madiff":
+                    agent_outs[reshaped_avail_actions == 0] = -th.inf
+                else:
+                    agent_outs[reshaped_avail_actions == 0] = -1e10
 
             agent_outs = th.nn.functional.softmax(agent_outs, dim=-1)
             if not test_mode:
@@ -54,7 +66,8 @@ class BasicMAC:
 
         return agent_outs.view(ep_batch.batch_size, self.n_agents, -1)
     
-    def diffusion_loss(self, ep_batch, t, seq_lengths):
+
+    """def diffusion_loss(self, ep_batch, t, seq_lengths):
         assert self.args.agent == 'diffusion', "diffusion_loss only available for diffusion agent"
         bs = ep_batch.batch_size
         obs = self._build_inputs(ep_batch, t) # (batch_size * n_agents, obs_dim)
@@ -62,7 +75,7 @@ class BasicMAC:
         avail_actions = ep_batch["avail_actions"][:, t]
         self.hidden_states, loss = self.agent.forward_and_losses(obs, act, self.hidden_states) # loss: # (batch_size * n_agents,)
         #print("shapes:", loss.shape, (seq_lengths > t).shape)
-        return loss.reshape(bs, -1).sum(-1)[seq_lengths > t].sum()
+        return loss.reshape(bs, -1).sum(-1)[seq_lengths > t].sum()"""
 
     def init_hidden(self, batch_size):
         # (batch_size, n_agents, rnn_hidden_dim)
@@ -84,9 +97,15 @@ class BasicMAC:
     def load_models(self, path):
         self.agent.load_state_dict(th.load("{}/agent.th".format(path), map_location=lambda storage, loc: storage))
 
-    def _build_agents(self, input_shape):
-        self.agent = agent_REGISTRY[self.args.agent](input_shape, self.args)
+    def _build_agents(self, input_shape, madiff_dataset=None):
+        # DIY: MADiffAgent的初始化参数可能有所不同
 
+        if self.args.agent == "madiff":
+            self.agent = agent_REGISTRY[self.args.agent](input_shape, madiff_dataset, self.args)
+        else:
+            self.agent = agent_REGISTRY[self.args.agent](input_shape, self.args)
+        
+    
     def _build_inputs(self, batch, t):
         # Assumes homogenous agents with flat observations.
         # Other MACs might want to e.g. delegate building inputs to each agent
@@ -109,5 +128,5 @@ class BasicMAC:
             input_shape += scheme["actions_onehot"]["vshape"][0]
         if self.args.obs_agent_id:
             input_shape += self.n_agents
-
+        # input_shape是agent的输入值，obs_dim (+ action_dim) (+ n_agents)
         return input_shape

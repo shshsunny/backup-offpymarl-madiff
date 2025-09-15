@@ -11,6 +11,7 @@ from .omar_learner import OMARLearner
 from .cfcq_learner import CFCQLearner
 from .omiga_learner import OMIGALearner
 
+from .madiff_learner import MADiffLearner
 REGISTRY = {}
 
 REGISTRY["bc_learner"] = BCLearner
@@ -26,3 +27,4 @@ REGISTRY["omar_learner"] = OMARLearner
 REGISTRY["cfcq_learner"] = CFCQLearner
 REGISTRY["omiga_learner"] = OMIGALearner
 
+REGISTRY["madiff_learner"] = MADiffLearner

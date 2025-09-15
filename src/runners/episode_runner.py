@@ -51,22 +51,27 @@ class EpisodeRunner:
         self.env.reset()
         self.t = 0
 
-    def run(self, test_mode=False, nolog=False):
+    def run(self, test_mode=False, nolog=False, return_info=False):
         self.reset()
 
         terminated = False
         episode_return = 0
         self.mac.init_hidden(batch_size=self.batch_size)
 
+        
+        if self.obs_id_len != None:
+            if self.obs_id_num != None:
+                onehot = np.eye(self.obs_id_len)[self.obs_id_num]
+            else: # 随机选择一个作为本episode的obs_id_num
+                onehot = np.eye(self.obs_id_len)[np.random.choice(self.obs_id_len)]
+
+                
         while not terminated:
             if self.obs_id_len == None:
                 obs = self.env.get_obs()
             else:
                 obs = self.env.get_obs()
-                if self.obs_id_num != None:
-                    onehot = np.eye(self.obs_id_len)[self.obs_id_num]
-                else:
-                    onehot = np.zeros(self.obs_id_len)
+                
                 for i in range(len(obs)):
                     obs[i] = np.concatenate([obs[i], onehot], axis=-1)
             
@@ -84,7 +89,7 @@ class EpisodeRunner:
 
             reward, terminated, env_info = self.env.step(actions[0])
             episode_return += reward
-
+            # print("%.8f" % reward) # debugging
             post_transition_data = {
                 "actions": actions,
                 "reward": [(reward,)],
@@ -95,14 +100,13 @@ class EpisodeRunner:
 
             self.t += 1
         
+        # print("episode finishes")
+
         if self.obs_id_len == None:
             obs = self.env.get_obs()
         else:
             obs = self.env.get_obs()
-            if self.obs_id_num != None:
-                onehot = np.eye(self.obs_id_len)[self.obs_id_num]
-            else:
-                onehot = np.zeros(self.obs_id_len)
+            
             for i in range(len(obs)):
                 obs[i] = np.concatenate([obs[i], onehot], axis=-1)
 
@@ -144,7 +148,13 @@ class EpisodeRunner:
                         self.logger.log_stat("epsilon", self.mac.action_selector.epsilon, self.t_env)
                 self.log_train_stats_t = self.t_env
         
-        return self.batch
+        if not return_info: # DIY: 若return_info==True，直接返回统计信息在evaluate阶段打印
+            return self.batch
+        else:
+            if _cur_stats != None:
+                return _cur_stats, _cur_returns
+            else:
+                return None
         
     def _log(self, returns, stats, prefix):
         log_dic = {}

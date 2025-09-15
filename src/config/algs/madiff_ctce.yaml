@@ -1,0 +1,139 @@
+# ==================== copied from mad_smac_3m_attn_good_history.yaml ====================
+# 注意：所有无关参数及可能影响offpymarl默认值的，最后必须删掉
+#meta_data:
+#  exp_name: "mad_smac"
+#  script_path: "run_scripts/train.py"
+#  num_workers: 2
+#  job_name: "{dataset}/h_{horizon}-hh_{history_horizon}-{model}-r_{returns_scale}-guidew_{condition_guidance_w}-ctde_{decentralized_execution}"
+
+#variables:
+# seed: [100, 200, 300]
+
+horizon: 4 # [4]
+history_horizon: 20 # [20]
+returns_scale: 6 # 12 # 20 # [20] 
+# NOTE: returns_scale 要视离线数据集的奖励来定，使归一化后expert return基本上等于1.0；test_ret指明测试时期望的return，通常等于expert return
+# 2m_vs_4m_split参考值：6（击杀2个敌人，但3个敌人才算赢）
+# 3m_vs_6z参考值：12（击杀3个敌人）
+
+# dataset: ["3m-Good"]
+condition_guidance_w: 1.2 # [1.2]
+
+#constants:
+# misc
+# seed: 100
+env_type: "smac"
+# n_agents: 3
+use_action: True
+discrete_action: True
+residual_attn: True
+decentralized_execution: False
+use_zero_padding: False
+pred_future_padding: True
+use_ddim_sample: True
+n_ddim_steps: 15
+
+# model
+# model: "models.SharedConvAttentionDeconv"
+# diffusion: "models.GaussianDiffusion"
+share_inv: True
+joint_inv: False # DIY
+n_diffusion_steps: 200
+action_weight: 10
+loss_weights: null
+loss_discount: 1
+# use_return_to_go: True
+dim_mults: [1, 4, 8]
+returns_condition: True
+predict_epsilon: True
+# calc_energy: False
+dim: 128
+hidden_dim: 256
+condition_dropout: 0.25
+condition_guidance_w: 1.2
+train_only_inv: False
+clip_denoised: True
+test_ret: 1.0
+# renderer: "utils.SMACRenderer"
+
+# dataset
+# loader: "datasets.SequenceDataset"
+normalizer: "CDFNormalizer"
+# max_n_episodes: 50000
+# preprocess_fns: []
+use_padding: True
+discount: 0.99 # 区别于offpymarl的gamma
+# max_path_length: 60 # 存疑：
+termination_penalty: 0.0
+
+# training
+# n_steps_per_epoch: 10000
+# n_train_steps: 1000000
+# batch_size: 32
+# learning_rate: 0.0002
+gradient_accumulate_every: 2
+# ema_decay: 0.995
+# log_freq: 1000
+# save_freq: 100000
+# sample_freq: 10000
+# n_saves: 5
+# save_parallel: False
+# n_reference: 3
+# save_checkpoints: True
+
+# eval
+# evaluator: "utils.MADEvaluator"
+# num_envs: 10
+# num_eval: 100
+# eval_freq: 100000
+
+# load checkpoint
+# continue_training: True
+
+
+# ==================== hyperparameters inherited from bc.yaml ====================
+
+action_selector: "multinomial"
+epsilon_start: 0 # diffusion policy 采用complete greedy 而非 epsilon greedy
+epsilon_finish: 0
+epsilon_anneal_time: 50000
+
+runner: "episode"
+
+buffer_size: 5000
+
+# use the BC_Learner to train
+agent_output_type: "pi_logits"
+learner: "madiff_learner"
+double_q: True
+
+mixer: "qmix" # 仅在和qmix expert cross-play时使用
+mixing_embed_dim: 32
+hypernet_layers: 2
+hypernet_embed: 64
+
+# agent type
+agent: "madiff"
+
+# mac
+mac: "basic_mac"
+
+name: "madiff_ctce"
+
+#------------ other modifications
+
+# --- pymarl options ---
+t_max: 1000000 # madiff: n_train_steps
+
+# --- RL hyperparameters ---
+batch_size: 32 # madiff: batch_size
+lr: 0.0002 # madiff: learning_rate
+# --- Agent parameters ---
+obs_last_action: False
+
+
+# --- env config --- 
+offline_max_buffer_size: 50000 # madiff: max_n_episodes
+
+test_nepisode: 5 # 20
+test_interval: 100000 # 与madiff一致

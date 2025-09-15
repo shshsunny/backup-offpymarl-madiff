@@ -12,7 +12,7 @@ from learners import REGISTRY as le_REGISTRY
 from runners import REGISTRY as r_REGISTRY
 from controllers import REGISTRY as mac_REGISTRY
 from components.episode_buffer import ReplayBuffer
-from components.offline_buffer import OfflineBuffer
+from components.offline_buffer import OfflineBuffer, MADiffOfflineBuffer
 from components.transforms import OneHot
 
 
@@ -135,7 +135,15 @@ def run_sequential(args, logger):
                           device="cpu" if args.buffer_cpu_only else args.device)
 
     # Setup multiagent controller here
-    mac = mac_REGISTRY[args.mac](buffer.scheme, groups, args)
+    if args.agent == 'madiff':
+        # MADiff需要用已知数据集的实例进行normalization和mask-generation
+        offline_buffer = OfflineBuffer(args, args.map_name, args.offline_data_quality,
+                args.offline_bottom_data_path, args.offline_max_buffer_size, 
+                shuffle=args.offline_data_shuffle) # device defauly cpu
+        madiff_dataset = MADiffOfflineBuffer(args, offline_buffer).dataset
+        mac = mac_REGISTRY[args.mac](buffer.scheme, groups, args, madiff_dataset=madiff_dataset)
+    else:
+        mac = mac_REGISTRY[args.mac](buffer.scheme, groups, args)
 
     # DIY: cross-play暂时不用管后面针对mac的改动，处理好evaluate即可
 
@@ -255,6 +263,15 @@ def run_sequential(args, logger):
     runner.close_env()
     logger.console_logger.info("Finish Training")
 
+def to_device_recursive(data, device):
+    # 将字典式数据递归地移动到指定设备
+    if isinstance(data, dict):
+        return {k: to_device_recursive(v, device) for k, v in data.items()}
+    elif isinstance(data, th.Tensor):
+        return data.to(device)
+    else:
+        return data  # 对于其他类型的数据，直接返回
+
 def train_sequential(args, logger, learner, runner, offline_buffer):
     t_env = 0
     episode = 0
@@ -271,17 +288,28 @@ def train_sequential(args, logger, learner, runner, offline_buffer):
     n_test_runs = max(1, args.test_nepisode//batch_size_run)
     test_start_time = time.time()
 
+    print("#####################here0")
+    # n_test_runs = 0 # debugging
     with th.no_grad():
         runner.t_env = t_env
         for _ in range(n_test_runs):
             runner.run(test_mode=True)
     
+    print("#####################here1")
     test_time_total += time.time() - test_start_time
 
+    if args.agent == 'madiff':
+        offline_buffer = MADiffOfflineBuffer(args, offline_buffer)
+    
+    print("#####################here2")
     while t_env < t_max:
         episode_sample = offline_buffer.sample(batch_size_train)
-        if episode_sample.device != args.device:
-            episode_sample.to(args.device)
+        # print("episode_sample:", episode_sample)
+        if isinstance(episode_sample, dict):
+            episode_sample = to_device_recursive(episode_sample, args.device)
+        else: # EpisodeBatch
+            if episode_sample.device != args.device:
+                episode_sample.to(args.device)
             
    
         learner.train(episode_sample, t_env, episode)

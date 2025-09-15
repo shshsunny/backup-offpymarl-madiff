@@ -3,6 +3,8 @@ import h5py
 import torch as th
 import numpy as np
 
+from .madiff_sequence import SequenceDataset
+import modules.agents.madiff.utils as utils
 ############## DataBatch ##############
 class OfflineDataBatch():
     def __init__(self, data, batch_size, max_seq_length, device='cpu') -> None:
@@ -66,9 +68,9 @@ class OfflineBufferH5(): # One Task
         self.h5_paths = []
         for final_data_path in self.data_path_list:
             self.h5_paths.extend([os.path.join(final_data_path, f) for f in sorted(os.listdir(final_data_path)) if f.endswith(".h5")])
-        args.logger.console_logger.debug("H5_PATHS: " + str(self.h5_paths))
+        # args.logger.console_logger.debug("H5_PATHS: " + str(self.h5_paths))
         #self.h5_paths = [os.path.join(self.data_path, f) for f in os.listdir(self.data_path)]
-
+        print("################H5 PATHS:", self.h5_paths) # debugging
         self.max_buffer_size = 100000000 if max_buffer_size <= 0 else max_buffer_size
         self.device = device # device does not work actually.
         self.shuffle = shuffle
@@ -84,6 +86,11 @@ class OfflineBufferH5(): # One Task
             # shuffle again
             shuffled_idx = np.random.choice(self.buffer_size, self.buffer_size, replace=False)
             self.data = {k: v[shuffled_idx] for k, v in self.data.items()}
+        
+        """print("+++OfflineBufferH5 init complete")
+        print("+++Data scheme:")
+        for k, v in self.data.items():
+            print(f"{k}: {v.shape}, {v.dtype}, {v.device if isinstance(v, th.Tensor) else 'N/A'}")"""    
         
     
     def get_data_path(self, map_name, quality, data_path):
@@ -217,3 +224,104 @@ class DataSaver():
     
     def close(self):
         self.save_batch()
+
+
+#-------------------------------- DIY
+
+def sequence_dataset(offline_buffer):
+    """
+    offline_buffer是OfflineBuffer类的实例，参考数据形状：
+    actions: (4000, 61, 3, 1), int64
+    actions_onehot: (4000, 61, 3, 9), float32
+    avail_actions: (4000, 61, 3, 9), int32
+    filled: (4000, 61, 1), int64
+    obs: (4000, 61, 3, 30), float32
+    reward: (4000, 61, 1), float32
+    state: (4000, 61, 48), float32
+    """
+    data = offline_buffer.buffer.data
+
+    actions = data['actions']
+    avail_actions = data['avail_actions']
+    filled = data['filled']
+    obs = data['obs']
+    reward = data['reward']
+    state = data['state']
+
+    n_episodes = actions.shape[0]
+    n_agents = actions.shape[2]
+
+    onehot_matrix = np.eye(n_agents)[np.newaxis, :, :] # (1, n_agents, n_agents)
+
+
+    for i in range(n_episodes):
+        ep_length = filled[i].sum().item()
+        episode_data = {}
+        onehot = np.broadcast_to(onehot_matrix, (ep_length, n_agents, n_agents))
+        # 拼接独热向量到obs中：(ep_length, n_agents, obs_dim + n_agents)
+        episode_data["observations"] = np.concatenate([obs[i][:ep_length], onehot], axis=-1)
+        episode_data["legal_actions"] = avail_actions[i][:ep_length]
+        shape = list(reward[i][:ep_length].shape)
+        shape[-1] = n_agents
+        episode_data["rewards"] = np.broadcast_to(reward[i][:ep_length], tuple(shape))
+        episode_data["actions"] = actions[i][:ep_length].squeeze(-1)
+        episode_data["terminals"] = np.zeros(
+            (ep_length, n_agents), dtype=bool
+        )
+        episode_data["terminals"][-1] = True
+        yield episode_data
+
+
+def cycle(dl):
+    while True:
+        for data in dl:
+            yield data
+
+class MADiffOfflineBuffer():
+    # 桥接OfflineBuffer（offpymarl类）和SequenceDataset（madiff类），并提供面向offpymarl框架的采样接口
+    def __init__(self, args, offline_buffer: OfflineBuffer):
+        assert args.agent == 'madiff', "MADiffOfflineBuffer only supports madiff_ctce config"
+        args.max_path_length = offline_buffer.buffer.data['filled'].shape[1]
+        print("################max_path_length: %d", args.max_path_length)
+        self.args = args
+        self.dataset = SequenceDataset(
+            #env_type=args.env_type,
+            #env=args.dataset,
+            sequence_dataset(offline_buffer), # 初始化生成器，用于将offline_buffer的数据导入SequenceDataset
+            n_agents=args.n_agents,
+            horizon=args.horizon,
+            history_horizon=args.history_horizon,
+            normalizer=args.normalizer,
+            #preprocess_fns=args.preprocess_fns,
+            max_n_episodes=args.offline_max_buffer_size, # args.max_n_episodes,
+            use_padding=args.use_padding,
+            use_action=args.use_action,
+            discrete_action=args.discrete_action,
+            max_path_length=args.max_path_length, # 存疑：作用？
+            include_returns=args.returns_condition,
+            include_env_ts=False, #args.env_ts_condition,
+            returns_scale=args.returns_scale,
+            discount=args.discount,
+            termination_penalty=args.termination_penalty,
+            agent_share_parameters=True, # SharedConvAttentionDeconv此值为True # utils.config.import_class(args.model).agent_share_parameters,
+            # use_seed_dataset=args.use_seed_dataset,
+            use_inv_dyn=True, #args.use_inv_dyn,
+            decentralized_execution=args.decentralized_execution,
+            use_zero_padding=args.use_zero_padding,
+            agent_condition_type="single" if args.decentralized_execution else "all", #args.agent_condition_type,
+            pred_future_padding=args.pred_future_padding,
+        )
+        self.dataloader = cycle(
+            th.utils.data.DataLoader(
+                self.dataset,
+                batch_size=args.offline_batch_size, # args.batch_size,
+                num_workers=0,
+                shuffle=True,
+                pin_memory=True,
+            )
+        )
+    
+
+    def sample(self, batch_size):
+        return next(self.dataloader)
+        #return self.buffer.sample(batch_size)

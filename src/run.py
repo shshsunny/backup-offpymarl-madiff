@@ -9,11 +9,13 @@ from utils.logging import Logger
 from utils.timehelper import time_left, time_str
 from os.path import dirname, abspath
 import json
+from copy import deepcopy
 
 from learners import REGISTRY as le_REGISTRY
 from runners import REGISTRY as r_REGISTRY
 from controllers import REGISTRY as mac_REGISTRY
 from components.episode_buffer import ReplayBuffer
+from components.offline_buffer import OfflineBuffer, MADiffOfflineBuffer
 from components.transforms import OneHot
 
 
@@ -92,7 +94,7 @@ def run(_run, _config, _log):
 def evaluate_sequential(args, runner):
 
     for _ in range(args.test_nepisode):
-        res = runner.run(test_mode=True)
+        res = runner.run(test_mode=True, return_info=True)
     
     if args.runner in ("episode_xp", "episode"):
         stats, returns = res
@@ -149,18 +151,44 @@ def run_sequential(args, logger):
                           device="cpu" if args.buffer_cpu_only else args.device)
 
     # Setup multiagent controller here
-    mac = mac_REGISTRY[args.mac](buffer.scheme, groups, args)
+    if args.agent == 'madiff':
+        # MADiff需要用已知数据集的实例进行normalization和mask-generation
+        offline_buffer = OfflineBuffer(args, args.map_name, args.offline_data_quality,
+                args.offline_bottom_data_path, args.offline_max_buffer_size, 
+                shuffle=args.offline_data_shuffle) # device defauly cpu
+        madiff_dataset = MADiffOfflineBuffer(args, offline_buffer).dataset
+        mac = mac_REGISTRY[args.mac](buffer.scheme, groups, args, madiff_dataset=madiff_dataset)
+    else:
+        mac = mac_REGISTRY[args.mac](buffer.scheme, groups, args)
 
     # DIY: cross-play暂时不用管后面针对mac的改动，处理好evaluate即可
 
     # Give runner the scheme
+
+    # DIY: 若明确指示第2个agent的配置，则使用之，否则默认与第1个agent相同
+    agent2 = getattr(args, "agent2", args.agent) 
+    obs_last_action2 = getattr(args, "obs_last_action2", args.obs_last_action)
+    args2 = deepcopy(args)
+    args2.agent = agent2
+    args2.obs_last_action = obs_last_action2
+
+    
     if args.runner == "episode_xp": # DIY: introduce the cross-play runner
         buffer2 = ReplayBuffer(scheme, groups, args.buffer_size, env_info["episode_limit"] + 1,
                           preprocess=preprocess,
                           device="cpu" if args.buffer_cpu_only else args.device)
         
         # 注意：需要修改controller初始化导入模型的工作（引入checkpoint_path2）
-        mac2 = mac_REGISTRY[args.mac](buffer2.scheme, groups, args)
+
+        if args2.agent == 'madiff':
+            # MADiff需要用已知数据集的实例进行normalization和mask-generation
+            offline_buffer2 = OfflineBuffer(args2, args2.map_name, args2.offline_data_quality,
+                    args2.offline_bottom_data_path, args2.offline_max_buffer_size, 
+                    shuffle=args2.offline_data_shuffle) # device defauly cpu
+            madiff_dataset2 = MADiffOfflineBuffer(args2, offline_buffer2).dataset
+            mac2 = mac_REGISTRY[args.mac](buffer.scheme, groups, args2, madiff_dataset=madiff_dataset2)
+        else:
+            mac2 = mac_REGISTRY[args.mac](buffer.scheme, groups, args2)
         runner.setup(scheme=scheme, groups=groups, preprocess=preprocess, mac1=mac, mac2=mac2)
     else:
         runner.setup(scheme=scheme, groups=groups, preprocess=preprocess, mac=mac)
@@ -172,8 +200,8 @@ def run_sequential(args, logger):
         if args.use_cuda:
             learner.cuda()
 
-        learner2 = le_REGISTRY[args.tm_learner](mac2, buffer.scheme, logger, args)
-        if args.use_cuda:
+        learner2 = le_REGISTRY[args2.tm_learner](mac2, buffer2.scheme, logger, args2)
+        if args2.use_cuda:
             learner2.cuda()
     else:
         # Learner

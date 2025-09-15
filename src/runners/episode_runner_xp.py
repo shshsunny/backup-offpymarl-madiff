@@ -56,13 +56,19 @@ class EpisodeRunnerXP:
     # DIY: 稍作改造以适配offpymarl
     #def run(self, mac1=None, mac2=None, test_mode=False, test_mode_1=False, test_mode_2=False, 
     #        negative_reward=False, tm_id=None, iter=None, eps_greedy_t=0, head_id=None, few_shot=False, lipo_xptm_id=None):
-    def run(self, test_mode=False, nolog=False):
+    def run(self, test_mode=False, nolog=False, return_info=False):
         self.reset()
 
         terminated = False
         episode_return = 0
         self.mac1.init_hidden(batch_size=self.batch_size)
         self.mac2.init_hidden(batch_size=self.batch_size)
+
+        if self.obs_id_len != None:
+            if self.obs_id_num != None:
+                onehot = np.eye(self.obs_id_len)[self.obs_id_num]
+            else: # 随机选择一个作为本episode的obs_id_num
+                onehot = np.eye(self.obs_id_len)[np.random.choice(self.obs_id_len)]
     
         while not terminated:
             
@@ -70,10 +76,7 @@ class EpisodeRunnerXP:
                 obs = self.env.get_obs()
             else:
                 obs = self.env.get_obs()
-                if self.obs_id_num != None:
-                    onehot = np.eye(self.obs_id_len)[self.obs_id_num]
-                else:
-                    onehot = np.zeros(self.obs_id_len)
+
                 for i in range(len(obs)):
                     obs[i] = np.concatenate([obs[i], onehot], axis=-1)
 
@@ -109,10 +112,7 @@ class EpisodeRunnerXP:
             obs = self.env.get_obs()
         else:
             obs = self.env.get_obs()
-            if self.obs_id_num != None:
-                onehot = np.eye(self.obs_id_len)[self.obs_id_num]
-            else:
-                onehot = np.zeros(self.obs_id_len)
+            
             for i in range(len(obs)):
                 obs[i] = np.concatenate([obs[i], onehot], axis=-1)
 
@@ -156,7 +156,7 @@ class EpisodeRunnerXP:
                 self.log_train_stats_t = self.t_env
 
         # DIY: 此runner暂仅供测试使用，直接返回统计数据
-        if not test_mode:
+        if not return_info:
             return self.batch
         else:
             if _cur_stats != None:
